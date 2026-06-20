@@ -1,16 +1,35 @@
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import Sidebar from './components/Sidebar';
+import Header from './components/Header';
+import Dashboard from './pages/Dashboard';
+import Products from './pages/Products';
+import BOM from './pages/BOM';
+import Sales from './pages/Sales';
+import Purchases from './pages/Purchases';
+import Manufacturing from './pages/Manufacturing';
+
 function App() {
   return (
-    <div className="flex h-screen w-full items-center justify-center bg-gray-900 text-white">
-      <div className="text-center">
-        <h1 className="mb-4 text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-emerald-400">
-          React JS + Tailwind CSS
-        </h1>
-        <p className="text-lg text-gray-300">
-          Your frontend is set up and ready to go!
-        </p>
+    <Router>
+      <div className="flex h-screen bg-slate-950 overflow-hidden font-sans text-slate-200">
+        <Sidebar />
+        <div className="flex-1 flex flex-col relative">
+          <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/5 to-purple-500/5 pointer-events-none" />
+          <Header />
+          <main className="flex-1 overflow-y-auto p-8 relative z-10">
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/products" element={<Products />} />
+              <Route path="/bom" element={<BOM />} />
+              <Route path="/sales" element={<Sales />} />
+              <Route path="/purchases" element={<Purchases />} />
+              <Route path="/manufacturing" element={<Manufacturing />} />
+            </Routes>
+          </main>
+        </div>
       </div>
-    </div>
-  )
+    </Router>
+  );
 }
 
-export default App
+export default App;
