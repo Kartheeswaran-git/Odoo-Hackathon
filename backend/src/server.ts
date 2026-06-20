@@ -3,6 +3,8 @@ import 'dotenv/config';
 import cors from 'cors';
 import express, { type Request, type Response } from 'express';
 import { Pool } from 'pg';
+import { createConfirmSalesOrderController } from './controllers/sales-order.controller';
+import { requireSupabaseUser } from './middleware/supabase-auth.middleware';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
@@ -31,8 +33,10 @@ app.get('/api/health', async (_request: Request, response: Response) => {
   }
 });
 
+app.post('/api/sales-orders/:id/confirm', requireSupabaseUser, createConfirmSalesOrderController(pool));
+
 const server = app.listen(port, () => {
-  console.log(`Mini ERP API listening on port ${port}`);
+  console.log(`Shiv Furniture Works ERP API listening on port ${port}`);
 });
 
 const shutdown = (signal: NodeJS.Signals): void => {
