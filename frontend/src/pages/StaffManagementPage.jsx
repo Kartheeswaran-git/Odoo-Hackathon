@@ -6,7 +6,7 @@ import { useAuth } from '../hooks/useAuth';
 const MODULES = [
   ['dashboard', 'Dashboard'], ['parties', 'Parties'], ['items', 'Products'],
   ['sales', 'Sales'], ['purchases', 'Purchases'], ['manufacturing', 'Manufacturing'],
-  ['reports', 'Reports'], ['settings', 'Settings'], ['manage_users', 'Manage Users'],
+  ['settings', 'Settings'], ['manage_users', 'Manage Users'],
 ];
 const ACTIONS = [['can_view', 'View'], ['can_create', 'Create'], ['can_edit', 'Edit'], ['can_delete', 'Delete'], ['can_approve', 'Approve']];
 const ROLES = ['Admin', 'Sales', 'Purchase', 'Manufacturing'];
@@ -75,7 +75,7 @@ export default function StaffManagementPage() {
     setSaving(true); setErr('');
     const grantRows = perms.filter((p) => ACTIONS.some(([k]) => p[k])).map((p) => ({ user_id: selected.id, ...p }));
     try {
-      await api.saveStaff(selected.id, { role: selected.role, active: selected.active, full_name: selected.full_name, permissions: grantRows });
+      await api.saveStaff(selected.id, { role: selected.role, active: selected.active, full_name: selected.full_name, phone: selected.phone, address: selected.address, permissions: grantRows });
       setMsg(`${selected.full_name || 'User'} updated successfully.`);
       await load();
       setSelected(null);
@@ -106,9 +106,9 @@ export default function StaffManagementPage() {
   return (
     <section aria-labelledby="staff-title" className="mx-auto max-w-7xl">
       <div className="mb-8">
-        <p className="mb-2 text-sm font-bold uppercase tracking-wider text-orange-500">Administration</p>
+        
         <h1 id="staff-title" className="text-3xl font-black tracking-tight text-slate-900">User Management</h1>
-        <p className="mt-2 text-base text-slate-500">Activate staff accounts, assign roles, and configure precise module permissions.</p>
+       
       </div>
 
       {/* Alerts */}
@@ -218,6 +218,35 @@ export default function StaffManagementPage() {
                     {ROLES.map((r) => <option key={r}>{r}</option>)}
                   </select>
                 </Field>
+                
+                <Field label="Email Address">
+                  <input
+                    readOnly
+                    value={selected.email ?? ''}
+                    className={`${INPUT} bg-slate-50 text-slate-500 cursor-not-allowed`}
+                    placeholder="User email"
+                  />
+                </Field>
+
+                <Field label="Mobile Number">
+                  <input
+                    value={selected.phone ?? ''}
+                    onChange={(e) => setField('phone', e.target.value)}
+                    className={INPUT}
+                    placeholder="+91 98765 43210"
+                  />
+                </Field>
+
+                <div className="sm:col-span-2">
+                  <Field label="Address">
+                    <input
+                      value={selected.address ?? ''}
+                      onChange={(e) => setField('address', e.target.value)}
+                      className={INPUT}
+                      placeholder="123 Street Name, City, State"
+                    />
+                  </Field>
+                </div>
               </div>
 
               {/* Active toggle */}

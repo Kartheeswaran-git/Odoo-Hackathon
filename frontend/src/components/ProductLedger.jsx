@@ -40,8 +40,7 @@ export default function ProductLedger() {
     setSaving(true);
     setError('');
     try {
-      // Save via module_records for now (backend generic module endpoint)
-      const row = await api.createModule('items', {
+      const row = await api.createProduct({
         name: draft.name.trim(),
         sku: draft.sku.trim() || `SKU-${Date.now()}`,
         sales_price: draft.sales_price || '0',
@@ -73,9 +72,7 @@ export default function ProductLedger() {
       {/* Header */}
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
-          <p className="mb-1 text-sm font-semibold text-safety">Inventory</p>
           <h1 id="product-ledger-title" className="text-2xl font-bold tracking-tight text-slate-800">Products</h1>
-          <p className="mt-1 text-sm text-slate-500">Free-to-Use = On-Hand − Reserved</p>
         </div>
         <div className="flex items-center gap-2">
           <span className="text-sm text-slate-500">{products.length} products</span>

@@ -3,9 +3,9 @@ import { useAuth } from './useAuth';
 
 const ROLE_MODULES = {
   Admin: ['*'],
-  Sales: ['dashboard', 'parties', 'items', 'sales', 'reports'],
-  Purchase: ['dashboard', 'parties', 'items', 'purchases', 'reports'],
-  Manufacturing: ['dashboard', 'items', 'manufacturing', 'reports'],
+  Sales: ['dashboard', 'parties', 'items', 'sales'],
+  Purchase: ['dashboard', 'parties', 'items', 'purchases'],
+  Manufacturing: ['dashboard', 'items', 'manufacturing'],
 };
 
 export function useModuleAccess() {

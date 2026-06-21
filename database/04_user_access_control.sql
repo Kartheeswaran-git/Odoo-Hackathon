@@ -18,6 +18,13 @@ create table if not exists public.user_module_permissions (
   primary key (user_id, module_name)
 );
 
+alter table public.user_module_permissions
+  drop constraint if exists user_module_permissions_module_name_check;
+
+alter table public.user_module_permissions
+  add constraint user_module_permissions_module_name_check
+  check (module_name in ('dashboard', 'parties', 'items', 'sales', 'purchases', 'manufacturing', 'bill_of_materials', 'reports', 'audit_logs', 'manage_users', 'settings'));
+
 -- Admins always have full access. Every other active account is governed by
 -- the module permissions assigned by Admin in Staff Management.
 create or replace function public.can_module_action(requested_module text, action_name text)
@@ -64,8 +71,11 @@ create policy products_edit on public.products for update using (public.can_modu
 
 drop policy if exists sales_read on public.sales_orders;
 drop policy if exists sales_create on public.sales_orders;
+drop policy if exists sales_edit on public.sales_orders;
 drop policy if exists sales_edit_draft on public.sales_orders;
 drop policy if exists sales_lines_read on public.sales_order_lines;
+drop policy if exists sales_lines_create on public.sales_order_lines;
+drop policy if exists sales_lines_edit on public.sales_order_lines;
 drop policy if exists sales_lines_write on public.sales_order_lines;
 create policy sales_read on public.sales_orders for select using (public.can_module_action('sales', 'view'));
 create policy sales_create on public.sales_orders for insert with check (public.can_module_action('sales', 'create'));
@@ -75,8 +85,12 @@ create policy sales_lines_create on public.sales_order_lines for insert with che
 create policy sales_lines_edit on public.sales_order_lines for update using (public.can_module_action('sales', 'edit')) with check (public.can_module_action('sales', 'edit'));
 
 drop policy if exists purchase_read on public.purchase_orders;
+drop policy if exists purchase_create on public.purchase_orders;
+drop policy if exists purchase_edit on public.purchase_orders;
 drop policy if exists purchase_write on public.purchase_orders;
 drop policy if exists purchase_lines_read on public.purchase_order_lines;
+drop policy if exists purchase_lines_create on public.purchase_order_lines;
+drop policy if exists purchase_lines_edit on public.purchase_order_lines;
 drop policy if exists purchase_lines_write on public.purchase_order_lines;
 create policy purchase_read on public.purchase_orders for select using (public.can_module_action('purchases', 'view'));
 create policy purchase_create on public.purchase_orders for insert with check (public.can_module_action('purchases', 'create'));
@@ -86,6 +100,8 @@ create policy purchase_lines_create on public.purchase_order_lines for insert wi
 create policy purchase_lines_edit on public.purchase_order_lines for update using (public.can_module_action('purchases', 'edit')) with check (public.can_module_action('purchases', 'edit'));
 
 drop policy if exists mo_read on public.manufacturing_orders;
+drop policy if exists mo_create on public.manufacturing_orders;
+drop policy if exists mo_edit on public.manufacturing_orders;
 drop policy if exists mo_write on public.manufacturing_orders;
 create policy mo_read on public.manufacturing_orders for select using (public.can_module_action('manufacturing', 'view'));
 create policy mo_create on public.manufacturing_orders for insert with check (public.can_module_action('manufacturing', 'create'));

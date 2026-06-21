@@ -6,3 +6,36 @@
   body { @apply m-0 bg-white font-sans text-slate-800 antialiased; }
   * { @apply box-border; }
 }
+
+.print-only { display: none; }
+
+@media print {
+  @page { margin: 14mm; size: A4; }
+  body { background: #fff !important; }
+  body * { visibility: hidden; }
+  .print-document, .print-document * { visibility: visible; }
+  .print-document { position: absolute; inset: 0 auto auto 0; width: 100%; border: 0 !important; box-shadow: none !important; padding: 0 !important; }
+  .no-print, .no-print * { display: none !important; }
+  .print-only { display: block; margin-bottom: 24px; border-bottom: 2px solid #1e293b; padding-bottom: 12px; }
+  .print-only h1 { margin: 0; color: #1e293b; font-size: 24px; font-weight: 800; }
+  .print-only p { margin: 4px 0 0; color: #475569; font-size: 13px; }
+  input, select, textarea { border: 0 !important; appearance: none; background: transparent !important; }
+  button { display: none !important; }
+  table { break-inside: auto; }
+  tr { break-inside: avoid; }
+  .formal-print-header { color: #1e293b; }
+  .formal-company { text-align: center; }
+  .formal-company h1 { font-size: 26px; letter-spacing: .02em; }
+  .formal-company p { margin: 2px 0; font-size: 11px; }
+  .formal-company .formal-tagline { margin: 3px 0 7px; color: #f97316; font-size: 12px; font-weight: 700; }
+  .formal-print-header > h2 { margin: 16px 0 12px; border-block: 1px solid #1e293b; padding: 7px; text-align: center; font-size: 15px; letter-spacing: .16em; }
+  .formal-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; font-size: 11px; }
+  .formal-meta > div { display: flex; flex-direction: column; gap: 3px; }
+  .formal-meta > div:last-child { align-items: flex-end; }
+  .formal-meta p { margin: 0; }
+  .formal-print-footer { display: grid; grid-template-columns: 1fr 220px; gap: 32px; margin-top: 40px; border-top: 1px solid #cbd5e1; padding-top: 14px; color: #475569; font-size: 10px; }
+  .formal-print-footer p { margin: 4px 0; }
+  .formal-signature { min-height: 72px; text-align: right; }
+  .formal-signature p { color: #1e293b; font-weight: 700; }
+  .formal-signature span { display: block; margin-top: 42px; border-top: 1px solid #64748b; padding-top: 4px; }
+}

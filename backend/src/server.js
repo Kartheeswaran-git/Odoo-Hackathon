@@ -34,7 +34,7 @@ const moduleDefaults = {
   purchases: [{ id: 'purchase-1', number: 'PO-1001', supplier: 'Timber Traders', status: 'Draft', total: '₹18,500' }],
   manufacturing: [{ id: 'manufacturing-1', order: 'MO-1001', product: 'Dining Table', quantity: '10', status: 'Draft' }],
   bill_of_materials: [{ id: 'bom-1', product: 'Dining Table', version: '1', components: 'Legs, Top, Screws' }],
-  reports: [{ id: 'report-1', name: 'Inventory valuation', period: 'Current month', status: 'Ready' }, { id: 'report-2', name: 'Sales summary', period: 'Current month', status: 'Ready' }],
+
   audit_logs: [{ id: 'audit-1', event: 'Sales order confirmed', module: 'Sales', created: 'Today' }],
   settings: [{ id: 'settings-1', setting: 'Company name', value: 'Shiv Furniture Works', updated: 'Today' }, { id: 'settings-2', setting: 'Currency', value: 'INR', updated: 'Today' }],
 };
@@ -65,7 +65,15 @@ async function auth(request, response, next) {
     if (profileError || !profile) return response.status(403).json({ error: 'User profile is missing or unavailable.' });
     if (!profile.active) return response.status(403).json({ error: 'Your account is waiting for Admin activation.' });
 
-    request.user = { id: data.user.id, profile };
+    request.user = { 
+      id: data.user.id, 
+      profile: {
+        ...profile,
+        email: data.user.email || '',
+        phone: data.user.user_metadata?.phone || '',
+        address: data.user.user_metadata?.address || ''
+      }
+    };
     request.supabase = userClient;
     next();
   } catch (error) { next(error); }
@@ -80,6 +88,11 @@ async function permission(request, response, next, module, action = 'view') {
   next();
 }
 const allow = (module, action) => (req, res, next) => void permission(req, res, next, module, action).catch(next);
+
+async function writeAudit(req, { action, entityType, entityId = null, details = {} }) {
+  const { error } = await req.supabase.from('audit_logs').insert({ actor_id: req.user.id, action, entity_type: entityType, entity_id: entityId, details });
+  if (error) console.error('Audit log write failed:', error.message);
+}
 
 // ── Public routes ──────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => res.json({ name: 'Shiv Furniture Works ERP API', status: 'running', health: '/api/health' }));
@@ -160,6 +173,80 @@ app.get('/api/inventory', auth, allow('items', 'view'), async (_req, res, next) 
   } catch (error) { next(error); }
 });
 
+app.post('/api/inventory', auth, allow('items', 'create'), async (req, res, next) => {
+  try {
+    const { name, sku, sales_price, cost_price, procurement_type, qty_on_hand = 0 } = req.body;
+    if (!name?.trim() || !sku?.trim()) return res.status(422).json({ error: 'Product name and SKU are required.' });
+    const normalizedType = procurement_type === 'Manufacture' ? 'Manufacturing' : 'Purchase';
+    const procureOnDemand = procurement_type === 'Make to Order';
+    const { data, error } = await req.supabase.from('products').insert({
+      name: name.trim(), sku: sku.trim(), sales_price: Number(sales_price || 0), cost_price: Number(cost_price || 0),
+      procure_on_demand: procureOnDemand, procurement_type: procureOnDemand ? normalizedType : null,
+    }).select('id, sku, name, sales_price, cost_price, qty_on_hand, qty_reserved, procure_on_demand, procurement_type').single();
+    if (error) return res.status(422).json({ error: error.message });
+    if (Number(qty_on_hand) > 0) {
+      const { error: stockError } = await req.supabase.from('stock_ledger').insert({ product_id: data.id, quantity_change: Number(qty_on_hand), movement_kind: 'Adjustment', reference_source: 'Adjustment', reference_id: data.id, created_by: req.user.id });
+      if (stockError) return res.status(422).json({ error: stockError.message });
+      data.qty_on_hand = Number(qty_on_hand);
+    }
+    await writeAudit(req, { action: 'Created', entityType: 'Product', entityId: data.id, details: { name: data.name, sku: data.sku } });
+    res.status(201).json({ ...data, qty_free_to_use: Number(data.qty_on_hand) - Number(data.qty_reserved) });
+  } catch (error) { next(error); }
+});
+
+// ── Debounced textbox suggestions ─────────────────────────────────────────────
+app.get('/api/suggestions/:type', auth, async (req, res, next) => {
+  try {
+    const type = String(req.params.type || '').toLowerCase();
+    const query = String(req.query.q || '').trim();
+
+    if (query.length < 2) return res.json([]);
+
+    if (type === 'items' || type === 'products') {
+      await permission(req, res, () => {}, 'items', 'view');
+      if (res.headersSent) return;
+
+      const safeQuery = query.replace(/[%,]/g, '');
+      const { data, error } = await req.supabase
+        .from('product_inventory')
+        .select('id, sku, name, sales_price, cost_price, qty_free_to_use')
+        .or(`name.ilike.%${safeQuery}%,sku.ilike.%${safeQuery}%`)
+        .order('name')
+        .limit(10);
+
+      if (error) return res.status(422).json({ error: error.message });
+      return res.json(data ?? []);
+    }
+
+    if (type === 'parties') {
+      await permission(req, res, () => {}, 'parties', 'view');
+      if (res.headersSent) return;
+
+      const { data: records, error } = await req.supabase
+        .from('module_records')
+        .select('id, payload')
+        .eq('module_name', 'parties')
+        .order('created_at', { ascending: false })
+        .limit(100);
+
+      if (error) return res.status(422).json({ error: error.message });
+
+      const needle = query.toLowerCase();
+      const source = records?.length
+        ? records.map((row) => ({ id: row.id, ...row.payload }))
+        : moduleDefaults.parties;
+
+      return res.json(source
+        .filter((party) => [party.name, party.party_type, party.phone, party.address]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(needle)))
+        .slice(0, 10));
+    }
+
+    return res.status(404).json({ error: 'Suggestion API not found.' });
+  } catch (error) { next(error); }
+});
+
 // ── Sales orders ───────────────────────────────────────────────────────────────
 app.get('/api/sales-orders', auth, allow('sales', 'view'), async (_req, res, next) => {
   try {
@@ -185,6 +272,7 @@ app.post('/api/sales-orders', auth, allow('sales', 'create'), async (req, res, n
       await req.supabase.from('sales_orders').delete().eq('id', order.id);
       return res.status(422).json({ error: linesErr.message });
     }
+    await writeAudit(req, { action: 'Created', entityType: 'Sales', entityId: order.id, details: { customer_name: customerName.trim(), lines: lines.length } });
     res.status(201).json({ id: order.id });
   } catch (error) { next(error); }
 });
@@ -234,7 +322,90 @@ app.post('/api/sales-orders/:id/confirm', auth, allow('sales', 'approve'), async
 
     const { error: updateErr } = await req.supabase.from('sales_orders').update({ status: 'Confirmed', confirmed_at: new Date().toISOString() }).eq('id', orderId);
     if (updateErr) return res.status(422).json({ error: updateErr.message });
+    await writeAudit(req, { action: 'Updated', entityType: 'Sales', entityId: orderId, details: { field: 'status', old_value: 'Draft', new_value: 'Confirmed', procurements } });
     res.json({ id: orderId, status: 'Confirmed', procurements });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/sales-orders/:id/deliver', auth, allow('sales', 'edit'), async (req, res, next) => {
+  try {
+    const { deliveredQty, orderedQty } = req.body;
+    const status = deliveredQty < orderedQty ? 'Partially Delivered' : 'Fully Delivered';
+    const { error } = await req.supabase.from('sales_orders').update({ status }).eq('id', req.params.id);
+    if (error) return res.status(422).json({ error: error.message });
+    
+    // Log the event
+    await req.supabase.from('audit_logs').insert([{ 
+      actor_id: req.user.id, 
+      action: 'Updated', 
+      entity_type: 'Sales', 
+      entity_id: req.params.id, 
+      details: { field: 'status', old_value: 'Confirmed', new_value: status, deliveredQty, orderedQty } 
+    }]);
+
+    res.json({ success: true, status });
+  } catch (error) { next(error); }
+});
+
+app.post('/api/sales-orders/:id/cancel', auth, allow('sales', 'edit'), async (req, res, next) => {
+  try {
+    const { error } = await req.supabase.from('sales_orders').update({ status: 'Cancelled' }).eq('id', req.params.id);
+    if (error) return res.status(422).json({ error: error.message });
+
+    // Log the event
+    await req.supabase.from('audit_logs').insert([{ 
+      actor_id: req.user.id, 
+      action: 'Updated', 
+      entity_type: 'Sales', 
+      entity_id: req.params.id, 
+      details: { field: 'status', old_value: 'Confirmed', new_value: 'Cancelled' } 
+    }]);
+
+    res.json({ success: true, status: 'Cancelled' });
+  } catch (error) { next(error); }
+});
+
+// ── Audit Logs ───────────────────────────────────────────────────────────────
+app.post('/api/audit-logs', auth, async (req, res, next) => {
+  try {
+    const { action, entityType, entityId, details } = req.body;
+    await writeAudit(req, { action, entityType, entityId, details });
+    res.status(201).json({ success: true });
+  } catch (error) { next(error); }
+});
+
+app.get('/api/audit-logs', auth, async (req, res, next) => {
+  try {
+    const { data, error } = await req.supabase
+      .from('audit_logs')
+      .select('id, actor_id, action, entity_type, entity_id, details, occurred_at, users!actor_id(full_name)')
+      .order('occurred_at', { ascending: false });
+    
+    if (error) return res.status(422).json({ error: error.message });
+    
+    // Aggregate metrics
+    const metrics = { Total: 0, Created: 0, Updated: 0, Deleted: 0 };
+    const logs = (data || []).map(row => {
+      metrics.Total++;
+      if (row.action === 'Created') metrics.Created++;
+      else if (row.action === 'Updated') metrics.Updated++;
+      else if (row.action === 'Deleted') metrics.Deleted++;
+
+      return {
+        id: row.id,
+        date_time: new Date(row.occurred_at).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }),
+        user: row.users?.full_name || 'System',
+        module: row.entity_type,
+        record_type: row.entity_type, // E.g., 'Sales', 'Product'
+        record_id: row.entity_id,
+        action: row.action,
+        field_changed: row.details?.field || '-',
+        old_value: row.details?.old_value || '-',
+        new_value: row.details?.new_value || '-'
+      };
+    });
+
+    res.json({ metrics, logs });
   } catch (error) { next(error); }
 });
 
@@ -242,23 +413,38 @@ app.post('/api/sales-orders/:id/confirm', auth, allow('sales', 'approve'), async
 // These are the ONLY module_name values allowed by the DB check constraint.
 const VALID_MODULES = new Set([
   'dashboard', 'parties', 'items', 'sales', 'purchases',
-  'manufacturing', 'reports', 'settings', 'manage_users',
+  'manufacturing', 'bill_of_materials', 'audit_logs',
+  'settings', 'manage_users',
 ]);
 app.get('/api/staff', auth, allow('manage_users', 'view'), async (_req, res, next) => {
   try {
-    const [usersRes, permsRes] = await Promise.all([
+    const [usersRes, permsRes, authRes] = await Promise.all([
       adminClient.from('users').select('id, full_name, role, active, created_at').order('created_at', { ascending: false }),
       adminClient.from('user_module_permissions').select('user_id, module_name, can_view, can_create, can_edit, can_delete, can_approve'),
+      adminClient.auth.admin.listUsers(),
     ]);
     if (usersRes.error) return res.status(422).json({ error: usersRes.error.message });
-    res.json({ users: usersRes.data ?? [], permissions: permsRes.data ?? [] });
+    if (authRes.error) return res.status(422).json({ error: authRes.error.message });
+    
+    const authUsers = authRes.data?.users || [];
+    const combinedUsers = (usersRes.data ?? []).map(u => {
+      const authU = authUsers.find(au => au.id === u.id);
+      return {
+        ...u,
+        email: authU?.email || '',
+        phone: authU?.user_metadata?.phone || '',
+        address: authU?.user_metadata?.address || ''
+      };
+    });
+
+    res.json({ users: combinedUsers, permissions: permsRes.data ?? [] });
   } catch (error) { next(error); }
 });
 
 // Update role, active status, and module permissions
 app.put('/api/staff/:id', auth, allow('manage_users', 'edit'), async (req, res, next) => {
   try {
-    const { role, active, full_name, permissions = [] } = req.body;
+    const { role, active, full_name, phone, address, permissions = [] } = req.body;
     const userId = req.params.id;
     const updateFields = {};
     if (role !== undefined) updateFields.role = role;
@@ -266,9 +452,15 @@ app.put('/api/staff/:id', auth, allow('manage_users', 'edit'), async (req, res, 
     if (full_name !== undefined) updateFields.full_name = full_name;
     const { error: updateErr } = await adminClient.from('users').update(updateFields).eq('id', userId);
     if (updateErr) return res.status(422).json({ error: updateErr.message });
-    // Also update display name in Supabase auth metadata if full_name changed
-    if (full_name !== undefined) {
-      await adminClient.auth.admin.updateUserById(userId, { user_metadata: { full_name } });
+    
+    // Update user metadata in Supabase Auth
+    const metadataUpdate = {};
+    if (full_name !== undefined) metadataUpdate.full_name = full_name;
+    if (phone !== undefined) metadataUpdate.phone = phone;
+    if (address !== undefined) metadataUpdate.address = address;
+    
+    if (Object.keys(metadataUpdate).length > 0) {
+      await adminClient.auth.admin.updateUserById(userId, { user_metadata: metadataUpdate });
     }
     await adminClient.from('user_module_permissions').delete().eq('user_id', userId);
     if (permissions.length) {
@@ -281,6 +473,7 @@ app.put('/api/staff/:id', auth, allow('manage_users', 'edit'), async (req, res, 
         if (permErr) return res.status(422).json({ error: permErr.message });
       }
     }
+    await writeAudit(req, { action: 'Updated', entityType: 'User Access', entityId: userId, details: { role, active, permission_count: permissions.length } });
     res.json({ status: 'updated' });
   } catch (error) { next(error); }
 });
@@ -295,6 +488,7 @@ app.delete('/api/staff/:id', auth, async (req, res, next) => {
     await adminClient.from('users').delete().eq('id', userId);
     const { error } = await adminClient.auth.admin.deleteUser(userId);
     if (error) return res.status(422).json({ error: error.message });
+    await writeAudit(req, { action: 'Deleted', entityType: 'User', entityId: userId });
     res.status(204).end();
   } catch (error) { next(error); }
 });
@@ -316,6 +510,13 @@ const DEFAULT_SETTINGS = {
   currency: 'INR',
   financial_year_start: '04',
 };
+
+app.get('/api/company-profile', auth, async (_req, res, next) => {
+  try {
+    const { data } = await adminClient.from('module_records').select('payload').eq('module_name', SETTINGS_KEY).maybeSingle();
+    res.json(data?.payload ?? DEFAULT_SETTINGS);
+  } catch (error) { next(error); }
+});
 
 app.get('/api/settings', auth, async (req, res, next) => {
   try {
@@ -339,12 +540,63 @@ app.put('/api/settings', auth, async (req, res, next) => {
   } catch (error) { next(error); }
 });
 
+// ── Manufacturing Production ───────────────────────────────────────────────────
+app.post('/api/manufacturing/:id/produce', auth, async (req, res, next) => {
+  await permission(req, res, () => {}, 'manufacturing', 'edit'); if (res.headersSent) return;
+  try {
+    const moId = req.params.id;
+    const { data: moRecord, error: moError } = await req.supabase.from('module_records').select('*').eq('id', moId).eq('module_name', 'manufacturing').single();
+    if (moError || !moRecord) return res.status(404).json({ error: 'Manufacturing order not found.' });
+    
+    const payload = moRecord.payload;
+    if (payload.status !== 'In Progress') return res.status(400).json({ error: 'Order must be In Progress to produce.' });
+
+    const { data: product, error: productError } = await req.supabase.from('product_inventory').select('id, name').eq('name', payload.product).single();
+    if (productError || !product) return res.status(400).json({ error: `Product ${payload.product} not found in inventory.` });
+
+    const componentsToConsume = [];
+    for (const comp of payload.components) {
+      const { data: cp, error: cpe } = await req.supabase.from('product_inventory').select('id, name').eq('name', comp.product).single();
+      if (cpe || !cp) return res.status(400).json({ error: `Component ${comp.product} not found in inventory.` });
+      componentsToConsume.push({ id: cp.id, name: cp.name, qty: comp.qty });
+    }
+
+    for (const comp of componentsToConsume) {
+      await adminClient.from('stock_ledger').insert({
+        product_id: comp.id,
+        quantity_change: -comp.qty,
+        movement_kind: 'Consumption',
+        reference_source: 'MO',
+        reference_id: moId,
+        created_by: req.user.id
+      });
+    }
+
+    await adminClient.from('stock_ledger').insert({
+      product_id: product.id,
+      quantity_change: payload.quantity,
+      movement_kind: 'Production',
+      reference_source: 'MO',
+      reference_id: moId,
+      created_by: req.user.id
+    });
+
+    payload.status = 'Done';
+    const { error: updateError } = await req.supabase.from('module_records').update({ payload }).eq('id', moId);
+    if (updateError) return res.status(500).json({ error: 'Failed to update order status.' });
+
+    await writeAudit(req, { action: 'Produced', entityType: 'manufacturing', entityId: moId, details: { produced: payload.quantity } });
+
+    res.json({ success: true, payload });
+  } catch (error) { next(error); }
+});
+
 // ── Generic module records ─────────────────────────────────────────────────────
 app.get('/api/modules/:module', auth, async (req, res, next) => {
   if (!moduleDefaults[req.params.module]) return res.status(404).json({ error: 'Module API not found.' });
   await permission(req, res, () => {}, req.params.module, 'view'); if (res.headersSent) return;
   try {
-    const { data: records, error } = await req.supabase.from('module_records').select('id, payload').eq('module_name', req.params.module).order('created_at', { ascending: false });
+    const { data: records, error } = await adminClient.from('module_records').select('id, payload').eq('module_name', req.params.module).order('created_at', { ascending: false });
     if (error) {
       // Table may not exist yet — return defaults gracefully
       console.warn('module_records query error (returning defaults):', error.message);
@@ -358,9 +610,21 @@ app.post('/api/modules/:module', auth, async (req, res, next) => {
   if (!moduleDefaults[req.params.module]) return res.status(404).json({ error: 'Module API not found.' });
   await permission(req, res, () => {}, req.params.module, 'create'); if (res.headersSent) return;
   try {
-    const { data: created, error } = await req.supabase.from('module_records').insert({ module_name: req.params.module, payload: req.body, created_by: req.user.id }).select('id').single();
+    const { data: created, error } = await adminClient.from('module_records').insert({ module_name: req.params.module, payload: req.body, created_by: req.user.id }).select('id').single();
     if (error) return res.status(422).json({ error: error.message });
+    await writeAudit(req, { action: 'Created', entityType: req.params.module, entityId: created.id, details: req.body });
     res.status(201).json({ id: created.id, ...req.body });
+  } catch (error) { next(error); }
+});
+
+app.put('/api/modules/:module/:id', auth, async (req, res, next) => {
+  if (!moduleDefaults[req.params.module]) return res.status(404).json({ error: 'Module API not found.' });
+  await permission(req, res, () => {}, req.params.module, 'edit'); if (res.headersSent) return;
+  try {
+    const { error } = await adminClient.from('module_records').update({ payload: req.body }).eq('module_name', req.params.module).eq('id', req.params.id);
+    if (error) return res.status(422).json({ error: error.message });
+    await writeAudit(req, { action: 'Updated', entityType: req.params.module, entityId: req.params.id, details: req.body });
+    res.json({ id: req.params.id, ...req.body });
   } catch (error) { next(error); }
 });
 
@@ -368,8 +632,9 @@ app.delete('/api/modules/:module/:id', auth, async (req, res, next) => {
   if (!moduleDefaults[req.params.module]) return res.status(404).json({ error: 'Module API not found.' });
   await permission(req, res, () => {}, req.params.module, 'delete'); if (res.headersSent) return;
   try {
-    const { error } = await req.supabase.from('module_records').delete().eq('module_name', req.params.module).eq('id', req.params.id);
+    const { error } = await adminClient.from('module_records').delete().eq('module_name', req.params.module).eq('id', req.params.id);
     if (error) return res.status(422).json({ error: error.message });
+    await writeAudit(req, { action: 'Deleted', entityType: req.params.module, entityId: req.params.id });
     res.status(204).end();
   } catch (error) { next(error); }
 });

@@ -301,6 +301,7 @@ drop policy if exists mo_components_write on public.manufacturing_order_componen
 drop policy if exists ledger_read on public.stock_ledger;
 drop policy if exists ledger_insert on public.stock_ledger;
 drop policy if exists audit_logs_read on public.audit_logs;
+drop policy if exists audit_logs_insert on public.audit_logs;
 drop policy if exists module_records_no_client_access on public.module_records;
 
 create policy users_read_own_or_admin on public.users for select using (id = auth.uid() or public.has_any_role(array['Admin']::public.user_role[]));
@@ -329,6 +330,7 @@ create policy mo_components_write on public.manufacturing_order_component_lines 
 create policy ledger_read on public.stock_ledger for select using (public.has_any_role(array['Admin','Sales','Purchase','Manufacturing']::public.user_role[]));
 create policy ledger_insert on public.stock_ledger for insert with check (public.has_any_role(array['Admin','Purchase','Manufacturing']::public.user_role[]));
 create policy audit_logs_read on public.audit_logs for select using (public.has_any_role(array['Admin']::public.user_role[]));
+create policy audit_logs_insert on public.audit_logs for insert with check (actor_id = auth.uid() and public.has_any_role(array['Admin','Sales','Purchase','Manufacturing']::public.user_role[]));
 create policy module_records_no_client_access on public.module_records for select using (false);
 
 commit;
